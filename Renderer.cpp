@@ -34,6 +34,7 @@ Renderer::Renderer() {
 
 /**
  * Ein Zufallsmuster erzeugen (zum Testen der LEDs)
+ * A random fill of the matrix. Matrix = 16xWORD = 16 x 16 bits
  */
 void Renderer::scrambleScreenBuffer(word matrix[16]) {
   for (byte i = 0; i < 16; i++) {

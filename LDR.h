@@ -36,10 +36,12 @@ private:
   byte _pin;
   unsigned int _lastValue;
   unsigned int _outputValue;
+  unsigned int _TotalMeanValues;
   unsigned int _meanvalues[LDR_MEAN_COUNT];
   byte _meanpointer;
   unsigned int _min;
   unsigned int _max;
+  boolean _BufferFull;
 };
 
 #endif

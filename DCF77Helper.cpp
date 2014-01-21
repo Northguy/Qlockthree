@@ -20,7 +20,7 @@
  */
 #include "DCF77Helper.h"
 
-// #define DEBUG
+ #define DEBUG
 #include "Debug.h"
 
 /**

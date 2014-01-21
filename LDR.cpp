@@ -28,10 +28,12 @@
  * ausmessen und eintragen.
  */
 LDR::LDR(byte pin) {
-  _pin = pin;
+  _pin  = pin;
   _meanpointer = 0;
-  _lastValue = 0;
+  _lastValue   = 0;
   _outputValue = 0;
+  _TotalMeanValues = 0;
+  _BufferFull = false;
 #ifdef LDR_AUTOSCALE
   _min = 1023;
   _max = 0;
@@ -48,6 +50,8 @@ unsigned int LDR::value() {
   unsigned int val = analogRead(_pin);
   if(val != _lastValue) {
     _lastValue = val;
+
+//Autoscale defines the min and max value to determine the boundaries of the Brightness
 #ifdef LDR_AUTOSCALE
     if(val < _min) {
       _min = val;
@@ -59,6 +63,7 @@ unsigned int LDR::value() {
     val = constrain(val, _min, _max); 
 #endif
     unsigned int mapVal = map(val, _min, _max, 100, 0);
+    
     DEBUG_PRINT(F(" _min: "));
     DEBUG_PRINT(_min);
     DEBUG_PRINT(F(" _max: "));
@@ -69,17 +74,45 @@ unsigned int LDR::value() {
     DEBUG_PRINTLN(mapVal);
     DEBUG_FLUSH();
     // glaetten
-    _meanvalues[_meanpointer] = mapVal;
-    _meanpointer++;
-    if(_meanpointer == LDR_MEAN_COUNT) {
-      _meanpointer = 0;
+    
+    if (_BufferFull != true) 
+    {
+      // buffer is not yet full
+      if (_meanpointer == 0) 
+      {
+        _outputValue == mapVal;
+        _TotalMeanValues == mapVal;
+      }
+       else
+       {
+         // store value in buffer position
+         _meanvalues[_meanpointer] = mapVal;
+         // calculate running average
+         _TotalMeanValues == _TotalMeanValues + mapVal;  
+         _outputValue = (unsigned int)(_TotalMeanValues)/(_meanpointer+1);
+       }
+     } //endif _meanpointer == 0
+    else
+    {
+      // buffer is full
+      // First remove the 'old' value from the buffer and substract this from the TotalMeanValues
+      _TotalMeanValues == _TotalMeanValues - _meanvalues[_meanpointer];
+      // now add MapVal
+      _TotalMeanValues == (_TotalMeanValues + mapVal);
+      // store new value in buffer position
+      _meanvalues[_meanpointer] = mapVal;
+      // Calculate average
+      _outputValue = (unsigned int)(_TotalMeanValues)/LDR_MEAN_COUNT;
     }
-    long ret = 0;
-    for(byte i=0; i<LDR_MEAN_COUNT; i++) {
-      ret += _meanvalues[i];
+    
+    _meanpointer++; // increase meanpointer
+    
+    if(_meanpointer == LDR_MEAN_COUNT) 
+    {
+      _meanpointer = 0; // reset meanpointer if array index length is exceeded
+      _BufferFull = true; // This only happens once because _Bufferfull is only false at initialisation. When the whole buffer is filled with data, the buffer becomes a circular buffer
     }
-    _outputValue = (unsigned int)(ret/LDR_MEAN_COUNT);
-  }
+    
   return _outputValue;
 }
-
+}

@@ -148,7 +148,7 @@
  * brauchen auch mehr Zeit (und mehr Speicher! / Gleitender Mittelwert)
  * Default: 32
  */
-  #define LDR_MEAN_COUNT 32
+  #define LDR_MEAN_COUNT 250
 
 #endif
 

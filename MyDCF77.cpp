@@ -23,7 +23,7 @@
  */
 #include "MyDCF77.h"
 
-// #define DEBUG
+#define DEBUG
 #include "Debug.h"
 
 /**

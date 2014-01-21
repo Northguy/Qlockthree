@@ -111,18 +111,15 @@
 #include "MyDCF77.h"
 #include "LedDriver.h"
 #include "LedDriverDefault.h"
-#include "LedDriverUeberPixel.h"
-#include "LedDriverPowerShiftRegister.h"
 #include "Button.h"
 #include "LDR.h"
 #include "DCF77Helper.h"
 #include "Renderer.h"
 #include "Staben.h"
-#include "Alarm.h"
 #include "Settings.h"
 #include "Zahlen.h"
 
-#define FIRMWARE_VERSION "V 3.2.2 vom 6.1.2014"  
+#define FIRMWARE_VERSION "V 3.2.2 vom 6.1.2014 adapted by Northguy"  
 
 /*
  * Den DEBUG-Schalter gibt es in allen Bibiliotheken. Wird er eingeschaltet, werden ueber den
@@ -131,7 +128,7 @@
  * Default: ausgeschaltet
  */
 // #define DEBUG
-   #include "Debug.h"
+ #include "Debug.h"
 // Die Geschwindigkeit der seriellen Schnittstelle. Default: 57600. Die Geschwindigkeit brauchen wir immer,
 // da auch ohne DEBUG Meldungen ausgegeben werden!
    #define SERIAL_SPEED 57600
@@ -167,68 +164,29 @@ Renderer renderer;
  * Data: 10; Clock: 12; Latch: 11; OutputEnable: 3
  * LinesToWrite: 10
  */
-#ifdef LED_DRIVER_DEFAULT
-  LedDriverDefault ledDriver(10, 12, 11, 3, 10);
+ 
+  #define PIN_FILTERED_DCF				// 1	Filtered DCF signal
+  #define PIN_SQW_SIGNAL 2				// 2	SQW Signal
+  #define PIN_MATRIX_OUTPUT_ENABLE 3	// 3	Matrix OutputEnable
+  #define PIN_SQW_LED 4					// 4	Clock Frequency LED (Green)
+  #define PIN_M_PLUS 5					// 5	M plus Switch
+  #define PIN_H_PLUS 6					// 6	H plus Switch
+  #define PIN_MODE 7					// 7	Mode Switch
+  #define PIN_DCF77_LED 8				// 8	DCF77 signal LED (yellow)
+  #define PIN_DCF77_SIGNAL 9			// 9	DCF77 digital signal
+  #define PIN_MATRIX_DATA 10			// 10	Data pin for LED matrix
+  #define PIN_MATRIX_Latch 11			// 11	Latch for Shift registers
+  #define PIN_MATRIX_Clock 12			// 12	Clock signal for LED matrix
+  #define PIN_SPEAKER 13				// 13	Speaker pin
   
-  #define PIN_MODE 7
-  #define PIN_M_PLUS 5
-  #define PIN_H_PLUS 6
-  
-  #define PIN_LDR A3
-  
-  #define PIN_SQW_SIGNAL 2
-  #define PIN_DCF77_SIGNAL 9
-  
-  #define PIN_SQW_LED 4
-  #define PIN_DCF77_LED 8
-  
-  #define PIN_SPEAKER 13
-#endif  
-  
-/**
- * Der LED-Treiber fuer 4 MAX7219-Treiber wie im Ueberpixel.
- * Data: 10; Clock: 11; Load: 12
- */
-#ifdef LED_DRIVER_UEBERPIXEL
-  LedDriverUeberPixel ledDriver(5, 6, 7);
-
-  #define PIN_MODE 8
-  #define PIN_M_PLUS 3
-  #define PIN_H_PLUS 4
-  
-  #define PIN_LDR A3
-  
-  #define PIN_SQW_SIGNAL 2
-  #define PIN_DCF77_SIGNAL 9
-  
-  #define PIN_SQW_LED 10
-  #define PIN_DCF77_LED 11
-
-  #define PIN_SPEAKER 13
-#endif
+  #define PIN_LDR A3					// A3	Light intensity sensor (LDR)
 
 /**
- * Der LED-Treiber fuer Power-Shift-Register.
- * Data: 10; Clock: 11; Load: 12
- */
-#ifdef LED_DRIVER_POWER_SHIFT_REGISTER
-  LedDriverPowerShiftRegister ledDriver(10, 12, 11, 3);
-
-  #define PIN_MODE 7
-  #define PIN_M_PLUS 5
-  #define PIN_H_PLUS 6
+ * The LED Matrix driver
+ */ 
   
-  #define PIN_LDR A3
+  LedDriverDefault ledDriver(PIN_MATRIX_DATA, PIN_MATRIX_Clock, PIN_MATRIX_Latch, PIN_MATRIX_OUTPUT_ENABLE, PIN_MATRIX_DATA);
   
-  #define PIN_SQW_SIGNAL 2
-  #define PIN_DCF77_SIGNAL 9
-  
-  #define PIN_SQW_LED -1
-  #define PIN_DCF77_LED -1
-
-  #define PIN_SPEAKER -1
-#endif
-
 /**
  * Die Real-Time-Clock mit der Status-LED fuer das SQW-Signal.
  */
@@ -240,11 +198,6 @@ byte helperSeconds;
  */
 MyDCF77 dcf77(PIN_DCF77_SIGNAL, PIN_DCF77_LED);
 DCF77Helper dcf77Helper;
-
-/**
- * Variablen fuer den Alarm.
- */
-Alarm alarm(PIN_SPEAKER);
 
 /**
  * Der Helligkeitssensor
@@ -361,14 +314,8 @@ void setup() {
   // und Speaker piepsen kassen, falls ENABLE_ALARM eingeschaltet ist.
   for(byte i=0; i<3; i++) {
     dcf77.statusLed(true);
-    if(settings.getEnableAlarm()) {
-      alarm.buzz(true);
-    }
     delay(100);
     dcf77.statusLed(false);
-    if(settings.getEnableAlarm()) {
-      alarm.buzz(false);
-    }
     delay(100);
   }
 
@@ -410,14 +357,8 @@ void setup() {
   // und Speaker piepsen kassen, falls ENABLE_ALARM eingeschaltet ist.
   for(byte i=0; i<3; i++) {
     ds1307.statusLed(true);
-    if(settings.getEnableAlarm()) {
-      alarm.buzz(true);
-    }
     delay(100);
     ds1307.statusLed(false);
-    if(settings.getEnableAlarm()) {
-      alarm.buzz(false);
-    }
     delay(100);
   }
 
@@ -490,15 +431,6 @@ void loop() {
     switch(mode) {
       case STD_MODE_NORMAL:
       case EXT_MODE_TIMESET:
-      case STD_MODE_ALARM:
-        if(alarm.isActive()) {
-          ds1307.readTime();
-        }
-        if(helperSeconds == 0) {
-          ds1307.readTime();
-          helperSeconds = ds1307.getSeconds();
-        }
-        break;
       case STD_MODE_SECONDS:
       case STD_MODE_BLANK:
         ds1307.readTime();
@@ -536,22 +468,6 @@ void loop() {
           if(abs(settings.getTimeShift()) > 9) {
             matrix[3 + i] |= pgm_read_byte_near(&(ziffern[1][i])) << 10;
           }
-        }
-      break;
-      case STD_MODE_ALARM:
-        renderer.clearScreenBuffer(matrix);
-        if(alarm.getShowAlarmTimeTimer() == 0) {
-          renderer.setMinutes(ds1307.getHours() + settings.getTimeShift(), ds1307.getMinutes(), settings.getLanguage(), matrix);
-          renderer.setCorners(ds1307.getMinutes(), settings.getRenderCornersCw(), matrix);
-          matrix[4] |= 0b0000000000011111; // Alarm-LED
-        } else {        
-          renderer.setMinutes(alarm.getAlarmTime()->getHours() + settings.getTimeShift(), alarm.getAlarmTime()->getMinutes(), settings.getLanguage(), matrix);
-          renderer.setCorners(alarm.getAlarmTime()->getMinutes(), settings.getRenderCornersCw(), matrix);
-          renderer.cleanWordsForAlarmSettingMode(settings.getLanguage(), matrix); // ES IST weg
-          if(alarm.getShowAlarmTimeTimer() % 2 == 0) {
-            matrix[4] |= 0b0000000000011111; // Alarm-LED
-          }
-          alarm.decShowAlarmTimeTimer();
         }
       break;
       case STD_MODE_SECONDS:
@@ -754,13 +670,6 @@ void loop() {
           settings.setTimeShift(settings.getTimeShift() + 1);
         }
       break;
-      case STD_MODE_ALARM:
-        alarm.getAlarmTime()->incMinutes();
-        alarm.setShowAlarmTimeTimer(10);
-        DEBUG_PRINT(F("A is now "));
-        DEBUG_PRINTLN(alarm.getAlarmTime()->asString());
-        DEBUG_FLUSH();
-        break;
       case STD_MODE_BRIGHTNESS:
         if(settings.getBrightness() < 100) {
           byte b = settings.getBrightness() + 10;
@@ -817,13 +726,6 @@ void loop() {
           settings.setTimeShift(settings.getTimeShift() - 1);
         }
       break;
-      case STD_MODE_ALARM:
-        alarm.getAlarmTime()->incHours();
-        alarm.setShowAlarmTimeTimer(10);
-        DEBUG_PRINT(F("A is now "));
-        DEBUG_PRINTLN(alarm.getAlarmTime()->asString());
-        DEBUG_FLUSH();
-        break;
       case STD_MODE_BRIGHTNESS:
         if(settings.getBrightness() > 1) {
           int i = settings.getBrightness() - 10;
@@ -862,10 +764,6 @@ void loop() {
   
   // Taste Moduswechsel gedrueckt?
   if (modeChangeButton.pressed()) {
-    if(alarm.isActive()) {
-      alarm.deactivate();
-      mode = STD_MODE_NORMAL;
-    } else {
       mode++;
     }
     // Brightness ueberspringen, wenn LDR verwendet wird.
@@ -891,12 +789,6 @@ void loop() {
     } else {
       ledDriver.setLinesToWrite(16);
     }
-
-    if(mode == STD_MODE_ALARM) {
-      // wenn auf Alarm gewechselt wurde, fuer 10 Sekunden die
-      // Weckzeit anzeigen.
-      alarm.setShowAlarmTimeTimer(10);
-    } 
 
     DEBUG_PRINT(F("Change mode pressed, mode is now "));
     DEBUG_PRINT(mode);
@@ -941,30 +833,6 @@ void loop() {
     }
   }
 
-  /*
-   *
-   * Alarm?
-   *
-   */
-  if((mode == STD_MODE_ALARM) && (alarm.getShowAlarmTimeTimer() == 0) && !alarm.isActive()) {
-    if(alarm.getAlarmTime()->getMinutesOf12HoursDay(0) == ds1307.getMinutesOf12HoursDay()) {
-      alarm.activate();
-    }
-  }
-  if(alarm.isActive()) {
-    // Nach 10 Minuten automatisch abschalten, falls der Wecker alleine rumsteht und die Nachbarn nervt...
-    if(alarm.getAlarmTime()->getMinutesOf12HoursDay(MAX_BUZZ_TIME_IN_MINUTES) == ds1307.getMinutesOf12HoursDay()) {
-      alarm.deactivate();
-      alarm.buzz(false);
-      mode = STD_MODE_NORMAL;
-    }
-    // Krach machen...    
-    if(ds1307.getSeconds() % 2 == 0) {
-      alarm.buzz(true);
-    } else {
-      alarm.buzz(false);
-    }
-  }
 
   /*
    *

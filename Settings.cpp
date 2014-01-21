@@ -123,13 +123,13 @@ void Settings::setTimeShift(char timeShift) {
 void Settings::loadFromEEPROM() {
   if((EEPROM.read(0) == SETTINGS_MAGIC_NUMBER) && (EEPROM.read(1) == SETTINGS_VERSION)) {
     // es sind gueltige Einstellungen vorhanden...
-    _language = EEPROM.read(2);
-    _renderCornersCw = EEPROM.read(3);
-    _use_ldr = EEPROM.read(4);
-    _brightness = EEPROM.read(5);
-    _enableAlarm = EEPROM.read(6);
+    _language			= EEPROM.read(2);
+    _renderCornersCw	= EEPROM.read(3);
+    _use_ldr			= EEPROM.read(4);
+    _brightness			= EEPROM.read(5);
+    _enableAlarm		= EEPROM.read(6);
     _dcfSignalIsInverted = EEPROM.read(7);
-    _timeShift = EEPROM.read(8);
+    _timeShift			= EEPROM.read(8);
   } 
 }
 
