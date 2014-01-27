@@ -1,3 +1,4 @@
+#pragma once
 /**
  * Clockthree.pde (.ino)
  * Die Firmware der Selbstbau-QLOCKTWO.
@@ -102,24 +103,44 @@
  *          - Der LDR wird nur alle 250ms gelesen, dann flackert er weniger bei unguenstigen Verhaeltnissen.
  * V 3.2.2. - DS1307 Multi-MCU-Faehig gemacht.
  *          - Initialisierung der DS1307 verbessert.
+ * V 3.2.A  - Replaced DCF77 module with generic library
+			- Replaced DS1307 module with generic library
+			- Added Low Pass Filter routine for error filtering on DCF77 signal
+			- Added running average routine on LDR in stead of doing a loop calculation once in a while
+			  TODO:	* Code only usable for standard LED driver
+					* Signal Inverted does not work yet
+					* Alarm routine needs to be fixed
  */
+
 #include <Wire.h> // Wire library fuer I2C
 #include <avr/pgmspace.h>
 #include <EEPROM.h>
 #include "Configuration.h"
-#include "DS1307.h"
-#include "MyDCF77.h"
 #include "LedDriver.h"
 #include "LedDriverDefault.h"
+#include "LedDriverUeberPixel.h"
+#include "LedDriverPowerShiftRegister.h"
 #include "Button.h"
 #include "LDR.h"
-#include "DCF77Helper.h"
 #include "Renderer.h"
 #include "Staben.h"
+#include "Alarm.h"
 #include "Settings.h"
 #include "Zahlen.h"
 
-#define FIRMWARE_VERSION "V 3.2.2 vom 6.1.2014 adapted by Northguy"  
+/************************************************************************/
+/* The following three #Includes use libraries as found in the public domain
+/* The libraries are used for the DCF77 implementation that is used in this file.
+/* The DCF77 implementation below is based on the work of Udo Klein
+/* See http://blog.blinkenlight.net/experiments/dcf77/binary-clock/                                                                      
+/************************************************************************/
+
+#include <MsTimer2.h>	// Library downloaded from: http://www.pjrc.com/teensy/td_libs_MsTimer2.html. See also http://playground.arduino.cc/Main/MsTimer2
+#include <DCF77.h>		// Library downloaded from: http://thijs.elenbaas.net/downloads/?did=1. See also http://playground.arduino.cc/Code/DCF77
+#include <Time.h>		// Library downloaded from: http://www.pjrc.com/teensy/td_libs_Time.html. See also http://playground.arduino.cc/Code/time
+#include <DS1307RTC.h>
+
+#define FIRMWARE_VERSION "V 3.2.A vom 27.1.2014 Code Adapted by Northguy"  
 
 /*
  * Den DEBUG-Schalter gibt es in allen Bibiliotheken. Wird er eingeschaltet, werden ueber den
@@ -127,8 +148,8 @@
  * Serial-Monitor muss mit der hier angegeben uebereinstimmen.
  * Default: ausgeschaltet
  */
-// #define DEBUG
- #include "Debug.h"
+   #define DEBUG
+   #include "Debug.h"
 // Die Geschwindigkeit der seriellen Schnittstelle. Default: 57600. Die Geschwindigkeit brauchen wir immer,
 // da auch ohne DEBUG Meldungen ausgegeben werden!
    #define SERIAL_SPEED 57600
@@ -146,10 +167,24 @@ Settings settings;
  * Display manuell wieder ein- / ausschalten.
  * Achtung! Wenn sich die Uhr nachmittags abschaltet ist sie in der falschen Tageshaelfte!
  */
-// um 3 Uhr Display abschalten (Minuten, Stunden, -, -, -, -)
-TimeStamp offTime(0, 3, 0, 0, 0, 0);
-// um 4:30 Uhr Display wieder anschalten (Minuten, Stunden, -, -, -, -)
-TimeStamp onTime(30, 4, 0, 0, 0, 0);
+
+/*
+typedef struct  {
+	uint8_t Second;
+	uint8_t Minute;
+	uint8_t Hour;
+	uint8_t Wday;   // day of week, sunday is day 1
+	uint8_t Day;
+	uint8_t Month;
+	uint8_t Year;   // offset from 1970;
+} 	tmElements_t, TimeElements, *tmElementsPtr_t;
+
+*/
+// um 3 Uhr Display abschalten (sec, min, hr, -, -, -)
+TimeElements offTime = {0, 0, 3, 0, 0, 0};
+
+// um 4:30 Uhr Display wieder anschalten (sec, min, hr, -, -, -)
+TimeElements onTime = {0, 30, 4, 0, 0, 0};
 
 /**
  * Der Renderer, der die Woerter auf die Matrix ausgibt.
@@ -164,40 +199,99 @@ Renderer renderer;
  * Data: 10; Clock: 12; Latch: 11; OutputEnable: 3
  * LinesToWrite: 10
  */
+#ifdef LED_DRIVER_DEFAULT
+ #define PIN_FILTERED_DCF 2           // 1        Filtered DCF signal  
+ #define PIN_SQW_SIGNAL 2             // 2        SQW Signal  
+ #define PIN_MATRIX_OUTPUT_ENABLE 3   // 3        Matrix OutputEnable  
+ #define PIN_SQW_LED 4                // 4        Clock Frequency LED (Green)  
+ #define PIN_M_PLUS 5                 // 5        M plus Switch  
+ #define PIN_H_PLUS 6                 // 6        H plus Switch  
+ #define PIN_MODE 7                   // 7        Mode Switch  
+ #define PIN_DCF77_LED 8              // 8        DCF77 signal LED (yellow)  
+ #define PIN_DCF77_SIGNAL 9           // 9        DCF77 digital signal  
+ #define PIN_MATRIX_DATA 10           // 10        Data pin for LED matrix  
+ #define PIN_MATRIX_Latch 11          // 11        Latch for Shift registers  
+ #define PIN_MATRIX_Clock 12          // 12        Clock signal for LED matrix  
+ #define PIN_SPEAKER 13               // 13        Speaker pin    
+ #define PIN_LDR A3                   // A3        Light intensity sensor (LDR)
  
-  #define PIN_FILTERED_DCF				// 1	Filtered DCF signal
-  #define PIN_SQW_SIGNAL 2				// 2	SQW Signal
-  #define PIN_MATRIX_OUTPUT_ENABLE 3	// 3	Matrix OutputEnable
-  #define PIN_SQW_LED 4					// 4	Clock Frequency LED (Green)
-  #define PIN_M_PLUS 5					// 5	M plus Switch
-  #define PIN_H_PLUS 6					// 6	H plus Switch
-  #define PIN_MODE 7					// 7	Mode Switch
-  #define PIN_DCF77_LED 8				// 8	DCF77 signal LED (yellow)
-  #define PIN_DCF77_SIGNAL 9			// 9	DCF77 digital signal
-  #define PIN_MATRIX_DATA 10			// 10	Data pin for LED matrix
-  #define PIN_MATRIX_Latch 11			// 11	Latch for Shift registers
-  #define PIN_MATRIX_Clock 12			// 12	Clock signal for LED matrix
-  #define PIN_SPEAKER 13				// 13	Speaker pin
+ /** * The LED Matrix driver */     
+ 
+ LedDriverDefault ledDriver(PIN_MATRIX_DATA, PIN_MATRIX_Clock, PIN_MATRIX_Latch, PIN_MATRIX_OUTPUT_ENABLE, PIN_MATRIX_DATA);  
+ 
+ 
+#endif  
   
-  #define PIN_LDR A3					// A3	Light intensity sensor (LDR)
+/**
+ * Der LED-Treiber fuer 4 MAX7219-Treiber wie im Ueberpixel.
+ * Data: 10; Clock: 11; Load: 12
+ */
+
+
+
+#ifdef LED_DRIVER_UEBERPIXEL
+  LedDriverUeberPixel ledDriver(5, 6, 7);
+
+  #define PIN_MODE 8
+  #define PIN_M_PLUS 3
+  #define PIN_H_PLUS 4
+  
+  #define PIN_LDR A3
+  
+  #define PIN_SQW_SIGNAL 2
+  #define PIN_DCF77_SIGNAL 9
+  
+  #define PIN_SQW_LED 10
+  #define PIN_DCF77_LED 11
+
+  #define PIN_SPEAKER 13
+#endif
 
 /**
- * The LED Matrix driver
- */ 
+ * Der LED-Treiber fuer Power-Shift-Register.
+ * Data: 10; Clock: 11; Load: 12
+
+*/
+ 
+#ifdef LED_DRIVER_POWER_SHIFT_REGISTER
+  LedDriverPowerShiftRegister ledDriver(10, 12, 11, 3);
+
+  #define PIN_MODE 7
+  #define PIN_M_PLUS 5
+  #define PIN_H_PLUS 6
   
-  LedDriverDefault ledDriver(PIN_MATRIX_DATA, PIN_MATRIX_Clock, PIN_MATRIX_Latch, PIN_MATRIX_OUTPUT_ENABLE, PIN_MATRIX_DATA);
+  #define PIN_LDR A3
   
+  #define PIN_SQW_SIGNAL 2
+  #define PIN_DCF77_SIGNAL 9
+  
+  #define PIN_SQW_LED -1
+  #define PIN_DCF77_LED -1
+
+  #define PIN_SPEAKER -1
+#endif
+
+
 /**
- * Die Real-Time-Clock mit der Status-LED fuer das SQW-Signal.
+ * Die Real-Time-Clock
  */
-DS1307 ds1307(0x68, PIN_SQW_LED);
+DS1307RTC ds1307;
 byte helperSeconds;
 
 /**
  * Der Funkempfaenger (DCF77-Signal der PTB Braunschweig).
  */
-MyDCF77 dcf77(PIN_DCF77_SIGNAL, PIN_DCF77_LED);
-DCF77Helper dcf77Helper;
+
+DCF77 DCF = DCF77(PIN_FILTERED_DCF, 0);
+
+volatile boolean sync = false;
+volatile time_t time = 0;
+
+
+/**
+ * Variablen fuer den Alarm.
+ */
+Alarm alarm(PIN_SPEAKER);
 
 /**
  * Der Helligkeitssensor
@@ -252,7 +346,13 @@ byte lastMode = mode;
 // Arduino analog input 5 = I2C SCL
 
 // Die Matrix, eine Art Bildschirmspeicher
+// word = 16 bit unsigned integer
+// therefore matrix = 16 x 16 bits
+
 word matrix[16];
+
+// Structure for storing RTCtime
+  TimeElements RTCtime;
 
 // Hilfsvariable, da I2C und Interrupts nicht zusammenspielen
 volatile boolean needsUpdateFromRtc = true;
@@ -280,6 +380,110 @@ int freeRam() {
   return (int) &v - (__brkval == 0 ? (int) &__heap_start : (int) __brkval); 
 }
 
+/** 
+* Low pass filter for DCF77 signal filtering. Code copied from routine of Udo Klein
+**/
+
+void low_pass_filter() {
+	// http://en.wikipedia.org/wiki/Low-pass_filter#Continuous-time_low-pass_filters
+	
+	// I will use fixed point arithmetics with 5 decimals
+	const uint16_t decimal_offset = 10000;
+	static uint32_t smoothed = 0*decimal_offset;
+	
+	const uint32_t input = digitalRead(PIN_DCF77_SIGNAL) * decimal_offset;
+	//const uint32_t input = analogRead(dcf77_analog_sample_pin)>200? decimal_offset: 0;
+	
+	// compute N such that the smoothed signal will always reach 50% of
+	// the input after at most 50 samples (=50ms).
+	// N = 1 / (1- 2^-(1/50)) = 72.635907286
+	const uint16_t N = 72;
+	smoothed = ((N-1) * smoothed + input) / N;
+	
+	// introduce some hysteresis
+	static uint8_t square_wave_output = 0;
+	
+	if ((square_wave_output == 0) == (smoothed >= decimal_offset/2)) {
+		// smoothed value more >= 50% away from output
+		// ==> switch output
+		square_wave_output = 1-square_wave_output;
+		// ==> max the smoothed value in order to introduce some
+		//     hysteresis, this also ensures that there is no
+		//     "infinite memory"
+		smoothed = square_wave_output? decimal_offset: 0;
+	}
+	
+	digitalWrite(PIN_FILTERED_DCF, square_wave_output);
+}
+
+/** 
+* Function to derive DCF Time. From code Udo Klein 
+**/
+
+unsigned long getDCFTime() {
+	const time_t DCFTime = DCF.getTime();
+	
+	sync = (DCFTime != 0);
+	return DCFTime;
+}
+
+/**
+* Diagnosis Function to evaluate DCF signal.
+* The loop program will not start until the DCF signal has been obtained                                                                     
+**/
+
+void diagnosis() {
+	Serial.println("Waiting for DCF77 time ... ");
+	
+	int rising_edge = 0;
+	int falling_edge = 0;
+	int previous_rising_edge;
+	bool was_high = false;
+	
+	while (timeStatus() == timeNotSet) {
+		const uint8_t sensor_value = digitalRead(PIN_FILTERED_DCF);
+		if (sensor_value) {
+			if (!was_high) {
+				rising_edge = millis();
+				was_high = true;
+			}
+			} else {
+			if (was_high) {
+				falling_edge = millis();
+				DEBUG_PRINT("Cycle, Pulse: ");
+				
+				const int cycle = rising_edge - previous_rising_edge;
+				if (cycle < 1000) {
+					DEBUG_PRINT(' ');
+				}
+				DEBUG_PRINT(cycle);
+				DEBUG_PRINT(',');
+				DEBUG_PRINT(' ');
+				
+				const int pulse = falling_edge - rising_edge;
+				if (pulse < 100) {
+					DEBUG_PRINT(' ');
+				}
+				DEBUG_PRINT(pulse);
+				previous_rising_edge = rising_edge;
+				was_high = false;
+				
+				DEBUG_PRINT(' ');
+				DEBUG_PRINT(pulse < 180? '.': 'X');
+				
+				DEBUG_PRINT(' ');
+				DEBUG_PRINT(cycle <1800? ' ': 'm');
+				
+				DEBUG_PRINTLN();
+			}
+		}
+	}
+	
+	Serial.println();
+	Serial.println("Exiting DCF77 diagnosis");
+}
+
+
 /**
  * Initialisierung. setup() wird einmal zu Beginn aufgerufen, wenn der
  * Arduino Strom bekommt.
@@ -292,8 +496,8 @@ void setup() {
 
   if(settings.getEnableAlarm()) {
     // als Wecker Display nicht abschalten...
-    TimeStamp offTime(0, 0, 0, 0, 0, 0);
-    TimeStamp onTime(0, 0, 0, 0, 0, 0);
+    TimeElements offTime = {0, 0, 0, 0, 0, 0};
+    TimeElements onTime  = {0, 0, 0, 0, 0, 0};
   }
   
   // LED-Treiber initialisieren
@@ -303,49 +507,62 @@ void setup() {
   // und Inhalt des Bildspeichers loeschen
   renderer.clearScreenBuffer(matrix);
   
-  // starte Wire-Library als I2C-Bus Master
-  Wire.begin();
-  
   // DS1307-Interrupt-Pin konfigurieren
   pinMode(PIN_SQW_SIGNAL, INPUT);
   digitalWrite(PIN_SQW_SIGNAL, HIGH);
   
   // DCF77-LED drei Mal als 'Hello' blinken lassen
-  // und Speaker piepsen kassen, falls ENABLE_ALARM eingeschaltet ist.
+  // und Speaker piepsen lassen, falls ENABLE_ALARM eingeschaltet ist.
   for(byte i=0; i<3; i++) {
-    dcf77.statusLed(true);
+    statusLed(PIN_DCF77_LED,HIGH);
+    if(settings.getEnableAlarm()) {
+      alarm.buzz(true);
+    }
     delay(100);
-    dcf77.statusLed(false);
+    statusLed(PIN_DCF77_LED,LOW);
+    if(settings.getEnableAlarm()) {
+      alarm.buzz(false);
+    }
     delay(100);
   }
 
   // 1 Hz-SQW-Signal auf der DS1307 einschalten
-  ds1307.readTime();  
-  if((ds1307.getSeconds() >= 60)||(ds1307.getMinutes() >= 60)||(ds1307.getHours() >= 24)) {
+  
+  ds1307.read(RTCtime); 
+   
+  if((RTCtime.Second >= 60)||(RTCtime.Minute >= 60)||(RTCtime.Hour >= 24)) {
     // Echtzeituhr enthaelt Schrott, neu beschreiben...
-    ds1307.setHours(11);
-    ds1307.setMinutes(11);
-    ds1307.setSeconds(11);
-    ds1307.setYear(2014);
-    ds1307.setMonth(1);
-    ds1307.setDate(1);
-    ds1307.setDayOfWeek(1);
+    RTCtime.Hour	= 12;
+	RTCtime.Minute  = 0;
+	RTCtime.Second	= 0;
+	RTCtime.Year	= 2014;
+	RTCtime.Month	= 1;
+	RTCtime.Day		= 1;
+	RTCtime.Wday	= 1;
   }
-  ds1307.writeTime();
-  helperSeconds = ds1307.getSeconds();
+  ds1307.write(RTCtime);
+ 
   DEBUG_PRINT(F("Time: "));
-  DEBUG_PRINT(ds1307.getHours());
+  DEBUG_PRINT(RTCtime.Hour);
   DEBUG_PRINT(F(":"));
-  DEBUG_PRINT(ds1307.getMinutes());
+  DEBUG_PRINT(RTCtime.Minute);
   DEBUG_PRINT(F(":"));
-  DEBUG_PRINTLN(ds1307.getSeconds());
+  DEBUG_PRINTLN(RTCtime.Second);
   DEBUG_FLUSH();
 
-  // Den Interrupt konfigurieren,
-  // nicht mehr CHANGE, das sind 2 pro Sekunde,
-  // RISING ist einer pro Sekunde, das reicht.
-  // Auf FALLING geandert, das signalisiert
-  // den Sekundenwechsel, Danke an Peter.
+/**
+   Den Interrupt konfigurieren,
+   nicht mehr CHANGE, das sind 2 pro Sekunde,
+   RISING ist einer pro Sekunde, das reicht.
+   Auf FALLING geandert, das signalisiert
+   den Sekundenwechsel, Danke an Peter.
+   
+   ATMega 328 can handle 2 external interrupts.
+   Interrupt 0 on pin 2
+   Interrupt 1 on pin 3
+   http://arduino.cc/en/Reference/attachInterrupt
+*/
+
   attachInterrupt(0, updateFromRtc, FALLING);
 
   // Werte vom LDR einlesen und vermuellen, da die ersten nichts taugen...
@@ -356,9 +573,15 @@ void setup() {
   // rtcSQWLed-LED drei Mal als 'Hello' blinken lassen
   // und Speaker piepsen kassen, falls ENABLE_ALARM eingeschaltet ist.
   for(byte i=0; i<3; i++) {
-    ds1307.statusLed(true);
+    statusLed(PIN_SQW_LED,true);
+    if(settings.getEnableAlarm()) {
+      alarm.buzz(true);
+    }
     delay(100);
-    ds1307.statusLed(false);
+    statusLed(PIN_SQW_LED,false);
+    if(settings.getEnableAlarm()) {
+      alarm.buzz(false);
+    }
     delay(100);
   }
 
@@ -385,6 +608,37 @@ void setup() {
   // Display einschalten...
   ledDriver.wakeUp();
   ledDriver.setBrightness(settings.getBrightness());
+  
+//Enable DCF77 data acquisition
+  pinMode(PIN_DCF77_SIGNAL, INPUT);
+  digitalWrite(PIN_DCF77_SIGNAL, HIGH);
+      
+  pinMode(PIN_FILTERED_DCF, OUTPUT);
+     
+  // Define timer with resolution of 1ms for low_pass_filter 
+  MsTimer2::set(1, low_pass_filter);
+  MsTimer2::start();
+  
+  /**
+  * Start the DCF Clock.... this will start the DCF polling through the 
+  * Diagnosis loop. This means that the loop() routine of the clock will
+  * NOT been entered until a valid DCF fix is found. Lets find out if this 
+  * is desirable. Otherwise disable the Diagnosis loop.
+  *
+  * Please note that in this situation the DCF directly updates the internal
+  * clock and not the RTC....
+  *
+  * Sync interval of internal clock can be set with setSyncInterval(xx)
+  *
+  **/
+  
+  // Start the DCF device
+  DCF.Start();
+  // set number of seconds between re-sync of internal clock
+  setSyncInterval(30); 
+  // time sync is obtained from DCF. 
+  setSyncProvider(getDCFTime); 
+  diagnosis();  
 }
 
 /**
@@ -399,6 +653,8 @@ void loop() {
       // wir hatten einen Ueberlauf...
       lastBrightnessCheck = millis();
     }    
+    // Brightness is adjusted after 250 miliseconds
+    // in LDR class a running average of LDR_MEAN_COUNT samples is taken (default = 32)
     if(lastBrightnessCheck + 250 < millis()) { // nur einmal pro Sekunde nachsehen...
       if(settings.getBrightness() != ldr.value()) {
         settings.setBrightness(ldr.value());
@@ -425,16 +681,26 @@ void loop() {
       helperSeconds = 0;
     }
     
+	
     //
     // Zeit einlesen...
     //
     switch(mode) {
       case STD_MODE_NORMAL:
       case EXT_MODE_TIMESET:
+      case STD_MODE_ALARM:
+        if(alarm.isActive()) {
+          ds1307.read(RTCtime);
+        }
+        if(helperSeconds == 0) {
+          ds1307.read(RTCtime);
+          helperSeconds = RTCtime.Second;
+        }
+        break;
       case STD_MODE_SECONDS:
       case STD_MODE_BLANK:
-        ds1307.readTime();
-        helperSeconds = ds1307.getSeconds();
+        ds1307.read(RTCtime);
+        helperSeconds = RTCtime.Second;
         break;
       // andere Modi egal...
     }
@@ -446,8 +712,8 @@ void loop() {
       case STD_MODE_NORMAL:
       case EXT_MODE_TIMESET:
         renderer.clearScreenBuffer(matrix);
-        renderer.setMinutes(ds1307.getHours() + settings.getTimeShift(), ds1307.getMinutes(), settings.getLanguage(), matrix);
-        renderer.setCorners(ds1307.getMinutes(), settings.getRenderCornersCw(), matrix);
+        renderer.setMinutes(RTCtime.Hour + settings.getTimeShift(), RTCtime.Minute, settings.getLanguage(), matrix);
+        renderer.setCorners(RTCtime.Minute, settings.getRenderCornersCw(), matrix);
       break;
       case EXT_MODE_TIME_SHIFT:
         renderer.clearScreenBuffer(matrix);
@@ -470,11 +736,27 @@ void loop() {
           }
         }
       break;
+      case STD_MODE_ALARM:
+        renderer.clearScreenBuffer(matrix);
+        if(alarm.getShowAlarmTimeTimer() == 0) {
+          renderer.setMinutes(RTCtime.Hour + settings.getTimeShift(), RTCtime.Minute, settings.getLanguage(), matrix);
+          renderer.setCorners(RTCtime.Minute, settings.getRenderCornersCw(), matrix);
+          matrix[4] |= 0b0000000000011111; // Alarm-LED
+        } else {        
+          renderer.setMinutes(alarm.getAlarmTime().Hour + settings.getTimeShift(), alarm.getAlarmTime().Minute, settings.getLanguage(), matrix);
+          renderer.setCorners(alarm.getAlarmTime().Minute, settings.getRenderCornersCw(), matrix);
+          renderer.cleanWordsForAlarmSettingMode(settings.getLanguage(), matrix); // ES IST weg
+          if(alarm.getShowAlarmTimeTimer() % 2 == 0) {
+            matrix[4] |= 0b0000000000011111; // Alarm-LED
+          }
+          alarm.decShowAlarmTimeTimer();
+        }
+      break;
       case STD_MODE_SECONDS:
         renderer.clearScreenBuffer(matrix);
         for (byte i = 0; i < 7; i++) {
-          matrix[1 + i] |= pgm_read_byte_near(&(ziffern[ds1307.getSeconds()/10][i])) << 11;
-          matrix[1 + i] |= pgm_read_byte_near(&(ziffern[ds1307.getSeconds()%10][i])) << 5;
+          matrix[1 + i] |= pgm_read_byte_near(&(ziffern[RTCtime.Second/10][i])) << 11;
+          matrix[1 + i] |= pgm_read_byte_near(&(ziffern[RTCtime.Second%10][i])) << 5;
         }
         break;
       case EXT_MODE_LDR_MODE:
@@ -656,13 +938,13 @@ void loop() {
     needsUpdateFromRtc = true;
     switch(mode) {
       case EXT_MODE_TIMESET:
-        ds1307.incMinutes();
-        ds1307.setSeconds(0);
-        ds1307.writeTime();
-        ds1307.readTime();
+        RTCtime.Minute++;
+        RTCtime.Second = 0;
+        ds1307.write(RTCtime);
+        ds1307.read(RTCtime);  // This seems an unneccessary line to me
         helperSeconds = 0;  
         DEBUG_PRINT(F("M is now "));
-        DEBUG_PRINTLN(ds1307.getMinutes());
+        DEBUG_PRINTLN(RTCtime.Minute);
         DEBUG_FLUSH();
         break;
       case EXT_MODE_TIME_SHIFT:
@@ -670,6 +952,13 @@ void loop() {
           settings.setTimeShift(settings.getTimeShift() + 1);
         }
       break;
+      case STD_MODE_ALARM:
+	//    alarm._alarmTime.Minute++;
+        alarm.setShowAlarmTimeTimer(10);
+        DEBUG_PRINT(F("A is now "));
+   //     DEBUG_PRINTLN(alarm.getAlarmTime()->asString());
+        DEBUG_FLUSH();
+        break;
       case STD_MODE_BRIGHTNESS:
         if(settings.getBrightness() < 100) {
           byte b = settings.getBrightness() + 10;
@@ -712,13 +1001,13 @@ void loop() {
     needsUpdateFromRtc = true;
     switch(mode) {
       case EXT_MODE_TIMESET:
-        ds1307.incHours();
-        ds1307.setSeconds(0);
-        ds1307.writeTime();
-        ds1307.readTime();
+   //     ds1307.incHours();
+   //    ds1307.setSeconds(0);
+   //     ds1307.writeTime();
+   //     ds1307.readTime();
         helperSeconds = 0;
         DEBUG_PRINT(F("H is now "));
-        DEBUG_PRINTLN(ds1307.getHours());
+//        DEBUG_PRINTLN(ds1307.getHours());
         DEBUG_FLUSH();
         break;
       case EXT_MODE_TIME_SHIFT:
@@ -726,6 +1015,13 @@ void loop() {
           settings.setTimeShift(settings.getTimeShift() - 1);
         }
       break;
+      case STD_MODE_ALARM:
+  //      alarm.getAlarmTime()->incHours();
+  //      alarm.setShowAlarmTimeTimer(10);
+        DEBUG_PRINT(F("A is now "));
+//        DEBUG_PRINTLN(alarm.getAlarmTime()->asString());
+        DEBUG_FLUSH();
+        break;
       case STD_MODE_BRIGHTNESS:
         if(settings.getBrightness() > 1) {
           int i = settings.getBrightness() - 10;
@@ -764,6 +1060,12 @@ void loop() {
   
   // Taste Moduswechsel gedrueckt?
   if (modeChangeButton.pressed()) {
+    if(alarm.isActive()) 
+    {
+      alarm.deactivate();
+      mode = STD_MODE_NORMAL;
+    } 
+    else {
       mode++;
     }
     // Brightness ueberspringen, wenn LDR verwendet wird.
@@ -789,6 +1091,12 @@ void loop() {
     } else {
       ledDriver.setLinesToWrite(16);
     }
+
+      if(mode == STD_MODE_ALARM) {
+        // wenn auf Alarm gewechselt wurde, fuer 10 Sekunden die
+        // Weckzeit anzeigen.
+        alarm.setShowAlarmTimeTimer(10);
+      } 
 
     DEBUG_PRINT(F("Change mode pressed, mode is now "));
     DEBUG_PRINT(mode);
@@ -822,16 +1130,47 @@ void loop() {
    * Das Verbessert den DCF77-Empfang bzw. ermoeglicht ein dunkles Schlafzimmer.
    *
    */
-  if((offTime.getMinutesOfDay() != 0) && (onTime.getMinutesOfDay() != 0)) {
-    if((mode != STD_MODE_BLANK) && (offTime.getMinutesOfDay() == ds1307.getMinutesOfDay())) {
+  if((offTime.Minute != 0) && (onTime.Minute != 0)) {
+	ds1307.read(RTCtime);
+    if((mode != STD_MODE_BLANK) && (offTime.Minute == RTCtime.Minute)) {
       mode = STD_MODE_BLANK;
       ledDriver.shutDown();
     }
-    if((mode == STD_MODE_BLANK) && (onTime.getMinutesOfDay() == ds1307.getMinutesOfDay())) {
+    if((mode == STD_MODE_BLANK) && (onTime.Minute == RTCtime.Minute)) {
       mode = lastMode;
       ledDriver.wakeUp();
     }
   }
+
+  /*
+   *
+   * Alarm?
+   *
+   */
+  
+  /***
+  
+    if((mode == STD_MODE_ALARM) && (alarm.getShowAlarmTimeTimer() == 0) && !alarm.isActive()) {
+      if(alarm.getAlarmTime()->getMinutesOf12HoursDay(0) == ds1307.getMinutesOf12HoursDay()) {
+        alarm.activate();
+      }
+    }
+    if(alarm.isActive()) {
+      // Nach 10 Minuten automatisch abschalten, falls der Wecker alleine rumsteht und die Nachbarn nervt...
+      if(alarm.getAlarmTime()->getMinutesOf12HoursDay(MAX_BUZZ_TIME_IN_MINUTES) == ds1307.getMinutesOf12HoursDay()) {
+        alarm.deactivate();
+        alarm.buzz(false);
+        mode = STD_MODE_NORMAL;
+      }
+    // Krach machen...    
+      if(ds1307.getSeconds() % 2 == 0) {
+        alarm.buzz(true);
+      } else {
+        alarm.buzz(false);
+      }
+  }
+
+*/
 
 
   /*
@@ -849,10 +1188,10 @@ void loop() {
    *
    */
 #ifdef ENABLE_DCF_LED
-  dcf77.statusLed(dcf77.signal(settings.getDcfSignalIsInverted()));
+  statusLed(PIN_DCF77_LED,HIGH);
 #endif
 #ifdef ENABLE_SQW_LED
-  ds1307.statusLed(digitalRead(PIN_SQW_SIGNAL) == HIGH);
+  statusLed(PIN_SQW_LED, digitalRead(PIN_SQW_SIGNAL) == HIGH);
 #endif
 
   /*
@@ -860,37 +1199,74 @@ void loop() {
    * DCF77-Empfaenger abfragen
    *
    */
-  if(dcf77.poll(settings.getDcfSignalIsInverted())) {
-    DEBUG_PRINT(F("Captured: "));
-    DEBUG_PRINTLN(dcf77.asString());
-    DEBUG_FLUSH();
-  
-    ds1307.readTime();
-    dcf77Helper.addSample(dcf77, ds1307);
-    // Stimmen die Abstaende im Array?
-    // Pruefung ohne Datum, nur Zeit!
-    if(dcf77Helper.samplesOk()) {
-      ds1307.setSeconds(0);
-      ds1307.setMinutes(dcf77.getMinutes());
-      ds1307.setHours(dcf77.getHours());
-      // Wir setzen auch das Datum, dann kann man, wenn man moechte,
-      // auf das Datum eingehen (spezielle Nachrichten an speziellen
-      // Tagen). Allerdings ist das Datum bisher nicht ueber
-      // den Abstand der TimeStamps geprueft, sondern nur ueber das
-      // Checkbit des DCF77-Telegramms, was unzureichend ist!
-      ds1307.setDate(dcf77.getDate());
-      ds1307.setDayOfWeek(dcf77.getDayOfWeek());
-      ds1307.setMonth(dcf77.getMonth());
-      ds1307.setYear(dcf77.getYear());
+    static time_t prevDisplay = 0;
+	statusLed(PIN_DCF77_LED,LOW);
+    
+    if( now() != prevDisplay) {
+	    prevDisplay = now();
 
+      statusLed(PIN_DCF77_LED,HIGH);
+	  ds1307.set(now());
+	  
+	  /*
+	  ds1307.setSeconds(second());
+      ds1307.setMinutes(minute());
+      ds1307.setHours(hour());
+      ds1307.setDate(day());
+      ds1307.setDayOfWeek(weekday());
+      ds1307.setMonth(month());
+      ds1307.setYear(year());
       ds1307.writeTime();
+	  
+	  */
+	  
       DEBUG_PRINTLN(F("DCF77-Time written to DS1307."));
       DEBUG_FLUSH();
-    }
-    else {
-      DEBUG_PRINTLN(F("DCF77-Time trashed because wrong distances between timestamps."));
-      DEBUG_FLUSH();
-    }
+
+      digitalClockDisplay();
+    }	
+	
+	
   }
+
+void digitalClockDisplay() {
+	if (sync) {
+		Serial.println("DCF sync good");
+		sync = false;
+	}
+	
+	DEBUG_PRINT(day());
+	DEBUG_PRINT('.');
+	DEBUG_PRINT(month());
+	DEBUG_PRINT('.');
+	DEBUG_PRINT(year());
+	DEBUG_PRINT(' ');
+	DEBUG_PRINT(' ');
+	
+	
+	const uint8_t minutes = minute();
+	const uint8_t hours = hour();
+	
+	print_2_digits(hours);
+	DEBUG_PRINT(':');
+	print_2_digits(minutes);
+	DEBUG_PRINT(':');
+	print_2_digits(second());
+	
+	DEBUG_PRINTLN();
 }
 
+void print_2_digits(const uint8_t digits) {
+	if (digits < 10) {
+		DEBUG_PRINT('0');
+	}
+	DEBUG_PRINTDEC(digits);
+}
+
+void statusLed(int _statusLedPin, boolean on) {
+	if(on) {
+		digitalWrite(_statusLedPin, HIGH);
+		} else {
+		digitalWrite(_statusLedPin, LOW);
+	}
+}
